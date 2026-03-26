@@ -129,10 +129,10 @@ def main():
                 imu_gyro = imu_gyro @ T_applanix_radar[:3, :3]
                 imu_yaw = -imu_gyro[:, 2]
             elif config['imu']['type'] == 'dmu':
-                imu_path = os.path.join(seq.seq_root, 'applanix', 'dmu_imu.csv')
+                imu_path = os.path.join(seq.seq_root, 'imu', 'dmu_imu.csv')
                 imu_data = np.loadtxt(imu_path, delimiter=',', skiprows=1)
                 imu_time = imu_data[:, 0] * 1e-9
-                imu_yaw = imu_data[:, 9]
+                imu_yaw = imu_data[:, 3]
             else:
                 print("Unknown IMU type")
                 return
@@ -161,6 +161,8 @@ def main():
         os.makedirs(odom_output_path)
         odom_output_path = odom_output_path + '/' + seq.ID + '.txt'
         other_log_path = seq_output_path + '/other_log'
+        if os.path.exists(other_log_path):
+            os.system('rm -r ' + other_log_path)
         os.makedirs(other_log_path, exist_ok=True)
         if save_images:
             image_output_path = seq_output_path + '/images'
@@ -270,6 +272,17 @@ def main():
                 print("Velocity GT: ", radar_frame.body_rate[:2].flatten())
                 print("Diff norm: ", np.linalg.norm(velocity) - np.linalg.norm(radar_frame.body_rate[:3]))
                 print("\n")
+
+            # Log the velocity in a csv file with timestamp_scan, timestamp_min, timstamp_max, x velocity, y velocity
+            vel_pd = pd.DataFrame(np.concatenate([np.array(radar_frame.timestamp).reshape(-1,1), np.array(radar_frame.timestamps.min()).reshape(-1,1), np.array(radar_frame.timestamps.max()).reshape(-1,1), velocity.reshape(1, -1)], axis=1).reshape(1, -1))
+            vel_pd[1] = vel_pd[1].astype(int)
+            vel_pd[2] = vel_pd[2].astype(int)
+            vel_pd[1] = radar_frame.timestamps.min()
+            vel_pd[2] = radar_frame.timestamps.max()
+            if not os.path.exists(other_log_path + '/velocity.csv'):
+                vel_pd.to_csv(other_log_path + '/velocity.csv', header=['timestamp_scan (s)', 'timestamp_min (us)', 'timestamp_max (us)', 'vx', 'vy'], index=None)
+            else:
+                vel_pd.to_csv(other_log_path + '/velocity.csv', mode='a', header=False, index=None)
 
 
 
