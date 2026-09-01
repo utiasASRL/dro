@@ -1,6 +1,6 @@
 data:
-  multi_sequence: true  # If true, the data path contains multiple sequences like data_path/{boereas-xxxx-xx-xx-xx-xx; boreas-yyyy-yy-yy-yy-yy; ...}
-  data_path: '/home/ced/Documents/data/boreas/doppler/rss/test/'
+  multi_sequence: false  # If true, the data path contains multiple sequences like data_path/{boereas-xxxx-xx-xx-xx-xx; boreas-yyyy-yy-yy-yy-yy; ...}
+  data_path: '/home/dl/Documents/phd/data/boreas/boreas-2024-12-03-12-54'
   #multi_sequence: false  # If false, the path should point to a single sequence like
   #data_path: '/home/ced/Documents/data/boreas/doppler/rss/test/boreas-2020-12-01-13-26'
                         
@@ -9,7 +9,7 @@ estimation:
   doppler_cost: true
   direct_cost: true
   use_gyro: true
-  gyro_bias_estimation: true
+  gyro_bias_estimation: false
   max_acceleration: 10.0 # m/s^2 This is used to detect failure modes due to too many outliers. The number 6.0 comes for the max performance of a car that is 0-100 in less than 2.4s (high performance car)
   # The following parameters are used to compensate for a bias in the doppler velocity. WARNING, the code assumes that x is forward
   vy_bias_prior: 0.11
@@ -21,8 +21,8 @@ estimation:
 
 
 gp:
-  lengthscale_az: 2.0
-  lengthscale_range: 4.0
+  lengthscale_az: 1.0
+  lengthscale_range: 1.0
   sz: 0.6
 
 radar:
@@ -32,6 +32,7 @@ radar:
   beta_corr_fact: 0.944
   range_offset: -0.31
   doppler_enabled: true
+  # encoder_bin_size: 5600
 
 imu:
   min_time_bias_init: 3.0
@@ -50,5 +51,9 @@ direct:
 
 log:
   verbose: true
-  display: true
+  display: false
   save_images: false
+  save_local_maps: false
+  save_scans: false
+  # Caps how much of each scan (in metres) gets saved
+  # max_scan_range: 150.0

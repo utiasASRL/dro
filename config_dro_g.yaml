@@ -25,6 +25,7 @@ radar:
   beta_corr_fact: 0.80
   range_offset: -0.31
   doppler_enabled: false
+  # encoder_bin_size: 5600
   chirp_up: true # Ignored if doppler_enabled is true (the true/false might be inverted)
 
 imu:
@@ -46,3 +47,7 @@ log:
   verbose: true
   display: true
   save_images: false
+  save_local_maps: false
+  save_scans: false
+  # Caps how much of each scan (in metres) gets saved
+  # max_scan_range: 150.0
