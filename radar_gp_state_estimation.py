@@ -24,8 +24,8 @@ def main():
         if path[-1] == '/':
             path = path[:-1]
         base_path = '/'.join(path.split('/')[:-1])
-        db = pb.BoreasDataset(base_path)
         sequence_id = config['data']['data_path'].split('/')[-1]
+        db = pb.BoreasDataset(base_path, split=[[sequence_id]])
         sequences = []
         sequences.append(db.get_seq_from_ID(sequence_id))
         
