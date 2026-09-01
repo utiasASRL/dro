@@ -125,7 +125,7 @@ def main():
         gt_first_T_inv= None
         gt_xyz = []
         est_xyz = []
-        
+        biases = []
 
         # If using the gyro, we need to load the IMU data
         if use_gyro:
@@ -176,7 +176,12 @@ def main():
         if os.path.exists(odom_output_path):
             os.system('rm -r ' + odom_output_path)
         os.makedirs(odom_output_path)
+        odom_2d_path = seq_output_path + '/odometry_2d'
+        if os.path.exists(odom_2d_path):
+            os.system('rm -r ' + odom_2d_path)
+        os.makedirs(odom_2d_path)
         odom_output_path = odom_output_path + '/' + seq.ID + '.txt'
+        odom_2d_path = odom_2d_path + '/' + seq.ID + '.txt'
         other_log_path = seq_output_path + '/other_log'
         if os.path.exists(other_log_path):
             os.system('rm -r ' + other_log_path)
@@ -245,6 +250,7 @@ def main():
                 print("Frame " + str(i-start_id+1) + " / " + str(end_id-start_id), end='\r')
             else:
                 print("Frame " + str(i-start_id+1) + " / " + str(end_id-start_id) + " - Avg. opti: " + str(round(opti_time_sum/time_counter,3)) + "s, time left (including visualisation): " + str(round((end_id-i)*time_sum/time_counter/60, 3)) + "min    ", end='\r')
+                np.savetxt(other_log_path + '/avg_time.txt', np.array([round(opti_time_sum/time_counter,3)]), fmt='%.3f', header='Avg. time per frame (s)')
 
 
 
@@ -317,7 +323,12 @@ def main():
             else:
                 vel_pd.to_csv(other_log_path + '/velocity.csv', mode='a', header=False, index=None)
 
-
+            # Store the biases
+            if use_gyro:
+                if gyro_bias_initialised:
+                    biases.append(gyro_bias)
+                else:
+                    biases.append(0.0)
 
             # Estimate the gyro bias when the velocity is null
             if estimate_gyro_bias and np.linalg.norm(velocity) < 0.05:
@@ -384,6 +395,14 @@ def main():
                 else:
                     df_data.to_csv(odom_output_path, mode='a', header=None, index=None, sep=' ')
 
+                # Save the 2D odometry to be synced with the local maps
+                df_data_2d = pd.DataFrame(np.array([radar_frame.timestamps[0][0], current_pos[0][0], current_pos[0][1], current_rot[0]]).reshape(1, -1))
+                df_data_2d[0] = radar_frame.timestamps[0][0].astype(int)
+                if not os.path.exists(odom_2d_path):
+                    df_data_2d.to_csv(odom_2d_path, header=None, index=None, sep=' ')
+                else:
+                    df_data_2d.to_csv(odom_2d_path, mode='a', header=None, index=None, sep=' ')
+
 
 
             # Visualisation and image saving
@@ -416,11 +435,7 @@ def main():
             if save_images:
                 cv2.imwrite(image_output_path + '/frame_' + str(i-start_id).zfill(6) + '.png', img)
 
-
-
-
             radar_frame.unload_data()
-
 
             # Time the loop for statistics
             time_end = time.time()
@@ -429,6 +444,10 @@ def main():
             time_sum += time_end - time_start
             time_counter += 1
 
+        # Save the biases
+        if use_gyro and estimate_gyro_bias:
+            biases = np.array(biases)
+            np.savetxt(other_log_path + '/gyro_bias.txt', biases)
 
     if visualise:
         cv2.destroyAllWindows()
