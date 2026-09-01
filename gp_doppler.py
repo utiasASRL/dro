@@ -180,7 +180,7 @@ class GPStateEstimator:
         temp_X2[:, 0] = temp_X2[:, 0] / l_az
         temp_X1[:, 1] = temp_X1[:, 1] / l_range
         temp_X2[:, 1] = temp_X2[:, 1] / l_range
-        dist = pairwise_distances(X1, X2, metric='sqeuclidean')
+        dist = pairwise_distances(temp_X1, temp_X2, metric='sqeuclidean')
         return np.exp(-dist/2)
 
 
