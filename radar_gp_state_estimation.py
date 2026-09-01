@@ -72,6 +72,8 @@ def main():
         return
     opts = config.copy()
     opts['estimation']['motion_model'] = motion_model
+    opts['log'].setdefault('save_local_maps', False)
+    opts['log'].setdefault('save_scans', False)
 
 
 
@@ -105,12 +107,17 @@ def main():
 
     # Loop over the sequences
     for seq in sequences:
+        opts['log']['local_map_path'] = os.path.join('output', seq.ID, 'local_maps')
+        opts['log']['cumulated_returns_path'] = os.path.join('output', seq.ID, 'cumulated_returns')
+        opts['log']['scan_path'] = os.path.join('output', seq.ID, 'scans')
 
         # Create the GP model
         temp_radar_frame = seq.get_radar(0)
         utils.fixRadarEncoderBinSize(temp_radar_frame, encoder_bin_size)
         res = radar_resolution_override if radar_resolution_override is not None else temp_radar_frame.resolution
         print("Radar resolution: ", res)
+        if 'max_scan_range' in config['log']:
+            opts['log']['max_scan_bins'] = config['log']['max_scan_range'] / res
         state_estimator = gpd.GPStateEstimator(opts, res)
         temp_radar_frame.unload_data()
 
@@ -179,6 +186,19 @@ def main():
             if os.path.exists(image_output_path):
                 os.system('rm -r ' + image_output_path)
             os.makedirs(image_output_path, exist_ok=True)
+        if opts['log']['save_local_maps']:
+            local_map_output_path = opts['log']['local_map_path']
+            if os.path.exists(local_map_output_path):
+                os.system('rm -r ' + local_map_output_path)
+            os.makedirs(local_map_output_path, exist_ok=True)
+            if os.path.exists(opts['log']['cumulated_returns_path']):
+                os.system('rm -r ' + opts['log']['cumulated_returns_path'])
+            os.makedirs(opts['log']['cumulated_returns_path'], exist_ok=True)
+        if opts['log']['save_scans'] or opts['log']['save_local_maps']:
+            scan_output_path = opts['log']['scan_path']
+            if os.path.exists(scan_output_path):
+                os.system('rm -r ' + scan_output_path)
+            os.makedirs(scan_output_path, exist_ok=True)
 
 
 

@@ -148,6 +148,15 @@ class GPStateEstimator:
                 self.one_minus_alpha = torch.tensor(1 - local_map_update_alpha).to(self.device)
                 self.alpha = torch.tensor(local_map_update_alpha).to(self.device)
 
+                self.save_local_maps = opts['log']['save_local_maps']
+                self.save_scans = opts['log']['save_scans']
+                self.local_map_path  = opts['log']['local_map_path']
+                self.cumulated_returns_path  = opts['log']['cumulated_returns_path']
+                self.scan_path  = opts['log']['scan_path']
+                if self.save_scans and ('max_scan_bins' in opts['log']):
+                    self.max_scan_bins = int(opts['log']['max_scan_bins'])
+                else:
+                    self.max_scan_bins = 100000000
 
                 # Doppler shift to range
                 self.shift_to_range = torch.tensor(radar_res / 2.0).to(self.device)
@@ -497,6 +506,28 @@ class GPStateEstimator:
             return cart, d_cart_d_rot, d_cart_d_shift
 
 
+    def getCartesianCoordinates(self, pos, rot):
+        with torch.no_grad():
+            # Get the polar coordinates of the image
+            polar_coord = self.polar_coord_raw_gp_infered
+
+            c_az = torch.cos(polar_coord[:, :, 0])
+            s_az = torch.sin(polar_coord[:, :, 0])
+            x = c_az * polar_coord[:, :, 1]
+            y = s_az * polar_coord[:, :, 1]
+
+            # Rotate the coordinates
+            c_rot = torch.cos(rot)
+            s_rot = torch.sin(rot)
+            x_rot = x * c_rot - y * s_rot
+            y_rot = x * s_rot + y * c_rot
+
+            # Translate the coordinates
+            x_trans = x_rot+pos[:, 0]
+            y_trans = y_rot+pos[:, 1]
+
+            return x_trans, y_trans
+
     # Correcting the scan polar coordinates to cartesian coordinates based on the per azimuth poses
     # (used for scan undistortion before updating the local map)
     def polarCoordCorrection_(self, pos, rot):
@@ -729,6 +760,17 @@ class GPStateEstimator:
                         # Please note that this is a "approximation" of the undistortion
                         # (the "proper undistortion" with a continous motion during the
                         # scan is not a trivial task)
+                        if self.save_scans:
+                            kSkipFirstLastRows = 2
+                            temp_pos = -rot_mats_transposed @ pos
+                            temp_rot = -rot
+                            x, y = self.getCartesianCoordinates(temp_pos, temp_rot)
+                            if x.shape[1] > self.max_scan_bins:
+                                x = x[kSkipFirstLastRows:-kSkipFirstLastRows, :self.max_scan_bins]
+                                y = y[kSkipFirstLastRows:-kSkipFirstLastRows, :self.max_scan_bins]
+                            scan_to_save = np.concatenate((x.detach().cpu().numpy().reshape((1,-1)), y.detach().cpu().numpy().reshape((1,-1)), prev_shifted[kSkipFirstLastRows:-kSkipFirstLastRows, :x.shape[1]].detach().cpu().numpy().reshape((1,-1))), axis=0).T
+                            np.save(self.scan_path + "/" + str(timestamps[0]) + ".npy", scan_to_save)
+
                         polar_coord_corrected = self.polarCoordCorrection_(pos, rot)
                         polar_coord_corrected[:,:,0] -= (self.azimuths[0])
                         polar_coord_corrected[polar_coord_corrected[:,:,0]<0] = polar_coord_corrected[polar_coord_corrected[:,:,0]<0] + torch.tensor((2*torch.pi, 0)).to(self.device)
@@ -736,7 +778,9 @@ class GPStateEstimator:
                         polar_coord_corrected[:,:,1] -= (self.radar_res/2.0)
                         polar_coord_corrected[:,:,1] /= self.radar_res
                         prev_shifted = torch.concatenate((prev_shifted, prev_shifted[0,:].unsqueeze(0)), dim=0)
+                        prev_shifted_cumulative = torch.cumsum(prev_shifted, dim=1)
                         polar_target = self.bilinearInterpolation_(prev_shifted, polar_coord_corrected, with_jac=False)
+                        polar_target_cumulative = self.bilinearInterpolation_(prev_shifted_cumulative, polar_coord_corrected, with_jac=False)
 
                         # Get the coordinates of the local map in the undistorted polar image
                         temp_polar_to_interp = self.local_map_polar.clone()
@@ -746,7 +790,9 @@ class GPStateEstimator:
                         temp_polar_to_interp[:,:,1] -= (self.radar_res/2.0)
                         temp_polar_to_interp[:,:,1] /= self.radar_res
                         polar_target = torch.concatenate((polar_target, polar_target[0,:].unsqueeze(0)), dim=0)
+                        polar_target_cumulative = torch.concatenate((polar_target_cumulative, polar_target_cumulative[0,:].unsqueeze(0)), dim=0)
                         local_map_update = self.bilinearInterpolation_(polar_target, temp_polar_to_interp, with_jac=False)
+                        local_map_update_cumulative = self.bilinearInterpolation_(polar_target_cumulative, temp_polar_to_interp, with_jac=False)
 
                         # Update the local map
                         if self.step_counter == 1:
@@ -755,6 +801,13 @@ class GPStateEstimator:
                             self.moveLocalMap_(frame_pos, frame_rot)
                             self.local_map[self.local_map_mask] = self.one_minus_alpha * self.local_map[self.local_map_mask] + self.alpha * local_map_update[self.local_map_mask]
                         #self.local_map = local_map_update
+
+                        if self.save_local_maps:
+                            lm = (self.local_map.detach().cpu().numpy().clip(0, 1) * 255).astype('uint8')
+                            cv2.imwrite(self.local_map_path + "/" + str(timestamps[0]) + ".png", lm)
+                            lm = (local_map_update_cumulative.detach().cpu().numpy()).clip(0,255).astype('uint8')
+                            cv2.imwrite(self.cumulated_returns_path + "/" + str(timestamps[0]) + ".png", lm)
+                            cv2.imwrite(self.scan_path + "/" + str(timestamps[0]) + ".png", (local_map_update.detach().cpu().numpy().clip(0,1)*255).astype('uint8'))
 
                         # Blur and normalise the local map
                         self.local_map_blurred = torchvision.transforms.functional.gaussian_blur(self.local_map.unsqueeze(0).unsqueeze(0), 3).squeeze()
