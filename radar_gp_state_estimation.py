@@ -292,6 +292,24 @@ def main():
                 vy = (T_axle_radar[:3,:3].T@(np.array([0, axle_vel[1], 0])))[1]
                 vy_bias = vy_bias_alpha * vy + (1-vy_bias_alpha) * vy_bias
                 state_estimator.vy_bias = vy_bias
+
+                # Log the difference between the Doppler-only velocity (without vy bias)
+                # and the DRO estimated velocity
+                temp_doppler_vel = doppler_vel.copy()
+                temp_doppler_vel[:2] -= vy_bias
+                vel_diff = temp_doppler_vel[:2] - velocity
+                print("Doppler-only vs DRO velocity diff: ", vel_diff, " (norm: ", np.linalg.norm(vel_diff), ")")
+                diff_pd = pd.DataFrame(np.array([[radar_frame.timestamp,
+                                                  temp_doppler_vel[0], temp_doppler_vel[1],
+                                                  velocity[0], velocity[1],
+                                                  vel_diff[0], vel_diff[1],
+                                                  np.linalg.norm(vel_diff),
+                                                  vy_bias]]))
+                diff_log_file = other_log_path + '/doppler_vs_dro_velocity.csv'
+                if not os.path.exists(diff_log_file):
+                    diff_pd.to_csv(diff_log_file, header=['timestamp_scan (s)', 'doppler_vx_corrected', 'doppler_vy_corrected', 'dro_vx', 'dro_vy', 'diff_vx', 'diff_vy', 'diff_norm', 'vy_bias'], index=None)
+                else:
+                    diff_pd.to_csv(diff_log_file, mode='a', header=False, index=None)
             if estimate_vy_bias:
                 print("\nVy bias: ", vy_bias)
 

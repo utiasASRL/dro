@@ -70,6 +70,12 @@ class GPStateEstimator:
 
             self.vy_bias = torch.tensor(opts['estimation']['vy_bias_prior']).to(self.device)
 
+            # Optional low-pass filtering of the lateral velocity
+            # (vy = alpha*vy_new + (1-alpha)*vy_prev, the smaller the alpha the stronger the smoothing)
+            self.smooth_vy = bool(opts['estimation'].get('smooth_vy', False))
+            self.vy_smoothing_alpha = float(opts['estimation'].get('vy_smoothing_alpha', 1.0))
+            self.vy_smoothed = None
+
 
             # Initialise the GP parameters
             kNeighbourhoodFactor = 1.0
@@ -708,6 +714,15 @@ class GPStateEstimator:
             
 
 
+    # Low-pass filter of the lateral velocity (first order IIR)
+    def smoothVy_(self, vy):
+        if self.vy_smoothed is None:
+            self.vy_smoothed = vy.clone()
+        else:
+            self.vy_smoothed = self.vy_smoothing_alpha * vy + (1 - self.vy_smoothing_alpha) * self.vy_smoothed
+        return self.vy_smoothed.clone()
+
+
     # Main function to perform the odometry step given the polar image with its azimuths and timestamps
     def odometryStep(self, polar_image, azimuths, timestamps, chirp_up=True):
         with torch.no_grad():
@@ -913,6 +928,8 @@ class GPStateEstimator:
                 self.state_init[:2] = self.state_init[:2]*(1+self.state_init[2]*delta_time)
             if torch.norm(self.state_init[:2]) < 0.75:
                 self.state_init[:] = 0.0
+                # Reset the lateral velocity filter to avoid dragging the previous motion
+                self.vy_smoothed = None
             result = self.solve_(self.state_init, 250, 1e-6, 1e-5)
 
             # Check if the the angular velocity is not too high
@@ -922,6 +939,10 @@ class GPStateEstimator:
                     if torch.abs(result[2]) > maxAngVel(result[:2]):
                         result[2] = self.prev_state[2]
                 self.prev_state = result.clone()
+
+            # Low-pass filter the lateral velocity if enabled
+            if self.smooth_vy:
+                result[1] = self.smoothVy_(result[1])
 
 
             self.state_init = result.clone()

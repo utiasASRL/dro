@@ -1,0 +1,58 @@
+data:
+  #multi_sequence: true  # If true, the data path contains multiple sequences like data_path/{boereas-xxxx-xx-xx-xx-xx; boreas-yyyy-yy-yy-yy-yy; ...}
+  #data_path: '/home/clegentil/Documents/data/boreas_2'
+  multi_sequence: true  # If false, the path should point to a single sequence like
+  #data_path: '/home/clegentil/Documents/data/boreas_2/boreas-2025-08-06-12-20'
+  data_path: '/media/clegentil/ext_nvme/data/boreas_2'
+                        
+
+estimation:
+  doppler_cost: true
+  direct_cost: true
+  use_gyro: true
+  gyro_bias_estimation: false
+  max_acceleration: 10.0 # m/s^2 This is used to detect failure modes due to too many outliers. The number 6.0 comes for the max performance of a car that is 0-100 in less than 2.4s (high performance car)
+  # The following parameters are used to compensate for a bias in the doppler velocity. WARNING, the code assumes that x is forward
+  vy_bias_prior: 0.11
+  estimate_doppler_vy_bias: true
+  # Optional low-pass filtering of the estimated lateral velocity
+  smooth_vy: True
+  vy_smoothing_alpha: 0.2 # vy = alpha*vy_new + (1-alpha)*vy_prev (the smaller the alpha, the stronger the smoothing)
+  T_axle_radar: [[ 0.99938287,  0.03512667,  0.        ,  0.51      ],
+                  [ 0.03512667, -0.99938287,  0.        ,  0.        ],
+                  [ 0.        ,  0.       ,  -1.        ,  1.945     ],
+                  [ 0.        ,  0.       ,   0.        ,  1.        ]]
+
+
+gp:
+  lengthscale_az: 2.0
+  lengthscale_range: 4.0
+  sz: 0.6
+
+radar:
+  ft: 76.04E9
+  meas_freq: 1600.0
+  del_f: 893.0E6
+  beta_corr_fact: 0.944
+  range_offset: -0.31
+  doppler_enabled: true
+
+imu:
+  min_time_bias_init: 3.0
+  type: 'dmu'
+
+doppler:
+  min_range: 4.0
+  max_range: 200.0
+
+direct:
+  min_range: 4.0
+  max_range: 70.0
+  max_local_map_range: 150.0
+  local_map_res: 0.1
+  local_map_update_alpha: 0.1 # The local map is updated as (1-alpha)*prev_map + alpha*current_scan
+
+log:
+  verbose: true
+  display: false
+  save_images: false

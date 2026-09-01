@@ -16,8 +16,8 @@ from pyboreas.utils.odometry import (
 )
 
 default_result_path = './output'
-gt_path = '/media/ced/ext_nvme/data/boreas_2'
-dim = 3
+gt_path = '/media/clegentil/ext_nvme/data/boreas_2'
+dim = 2
 
 # New sequences
 sequence_type = {
