@@ -19,4 +19,15 @@ def checkChirp(radar_frame):
     else:
         chirp_up = False
     return chirp_up
-    
+
+
+BOREAS_ENCODER_BIN_SIZE = 5600
+
+def fixRadarEncoderBinSize(radar_frame, encoder_bin_size, boreas_encoder_bin_size=BOREAS_ENCODER_BIN_SIZE):
+    # pyboreas hard-codes the Navtech encoder bin size (ticks per revolution)
+    # used to convert the raw encoder reading into an azimuth angle to the
+    # Boreas value of 5600. This function lets us apply our own encoder bin size for other data.
+    if encoder_bin_size == boreas_encoder_bin_size:
+        return
+    encoder_ticks = np.round(radar_frame.azimuths / (2 * np.pi) * boreas_encoder_bin_size)
+    radar_frame.azimuths = (encoder_ticks / encoder_bin_size * 2 * np.pi).astype(radar_frame.azimuths.dtype)

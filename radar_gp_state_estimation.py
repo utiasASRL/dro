@@ -44,6 +44,14 @@ def main():
         chirp_up = config['radar']['chirp_up']
     use_gyro = config['estimation']['use_gyro']
 
+    radar_resolution_override = config['radar'].get('resolution')
+
+    # pyboreas always decodes azimuths assuming a Navtech encoder bin size of
+    # 5600 ticks per revolution (the value used on Boreas). Other platforms
+    # (e.g. Warthog) use a radar with a different encoder bin size, so this
+    # option lets us correct the azimuths accordingly.
+    encoder_bin_size = config['radar'].get('encoder_bin_size', utils.BOREAS_ENCODER_BIN_SIZE)
+
     # Parameters for bias estimation
     gyro_bias_alpha = 0.01 # For the gyro bias low-pass filter update
     estimate_gyro_bias = False
@@ -100,7 +108,9 @@ def main():
 
         # Create the GP model
         temp_radar_frame = seq.get_radar(0)
-        res = temp_radar_frame.resolution
+        utils.fixRadarEncoderBinSize(temp_radar_frame, encoder_bin_size)
+        res = radar_resolution_override if radar_resolution_override is not None else temp_radar_frame.resolution
+        print("Radar resolution: ", res)
         state_estimator = gpd.GPStateEstimator(opts, res)
         temp_radar_frame.unload_data()
 
@@ -190,6 +200,9 @@ def main():
 
             # Load the radar frame
             radar_frame = seq.get_radar(i)
+            utils.fixRadarEncoderBinSize(radar_frame, encoder_bin_size)
+            if radar_resolution_override is not None:
+                radar_frame.resolution = radar_resolution_override
             
             if gt_first_T_inv is None:
                 gt_first_T_inv = np.linalg.inv(radar_frame.pose)
