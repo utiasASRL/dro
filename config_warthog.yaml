@@ -12,8 +12,8 @@ estimation:
   use_gyro: false
   max_acceleration: 10.0 # m/s^2 This is used to detect failure modes due to too many outliers. The number 6.0 comes for the max performance of a car that is 0-100 in less than 2.4s (high performance car)
   # The following parameters are used to compensate for a bias in the doppler velocity. WARNING, the code assumes that x is forward
-  vy_bias_prior: 0.11
-  estimate_doppler_vy_bias: true
+  vy_bias_prior: 0.0
+  estimate_doppler_vy_bias: false
   T_axle_radar: [[ 0.99938287,  0.03512667,  0.        ,  0.51      ],
                   [ 0.03512667, -0.99938287,  0.        ,  0.        ],
                   [ 0.        ,  0.       ,  -1.        ,  1.945     ],
