@@ -739,6 +739,9 @@ class GPStateEstimator:
             self.timestamps = torch.tensor(timestamps).to(self.device).squeeze()
             delta_time = (timestamps[0] - last_scan_time) * 1e-6
             self.delta_time = delta_time
+            drop = (delta_time > 1.5*(timestamps[-1] - timestamps[0]) * 1e-6)
+            if drop:
+                print(f"\nWarning: Large delta_time detected: {delta_time}")
             # Update the pose and the local map (if needed)
             if self.pose_estimation:
 
@@ -747,7 +750,10 @@ class GPStateEstimator:
                     vel_body, prev_scan_pos, prev_scan_rot = self.motion_model.getVelPosRot(self.state_init, with_jac=False)
 
                     # Get delta pose from the beginning of the previous scan to the beginning of the current scan
-                    frame_pos, frame_rot = self.motion_model.getPosRotSingle(self.state_init, self.timestamps[0])
+                    if drop:
+                        frame_pos, frame_rot = self.motion_model.getPosRotSingle(self.state_init, last_scan_time + (timestamps[-1] - timestamps[0]))
+                    else:   
+                        frame_pos, frame_rot = self.motion_model.getPosRotSingle(self.state_init, self.timestamps[0])
 
                     # Update the current position and rotation
                     rot_mat = torch.tensor([[torch.cos(self.current_rot), -torch.sin(self.current_rot)], [torch.sin(self.current_rot), torch.cos(self.current_rot)]]).to(self.device)
@@ -843,7 +849,10 @@ class GPStateEstimator:
             # Prepare the data in torch
             self.azimuths = torch.tensor(azimuths).to(self.device).float()
             self.nb_azimuths = torch.tensor(len(azimuths)).to(self.device)
-            self.motion_model.setTime(self.timestamps, self.timestamps[0])
+            if drop:
+                self.motion_model.setTime(self.timestamps, last_scan_time+(self.timestamps[-1] - self.timestamps[0]))
+            else:
+                self.motion_model.setTime(self.timestamps, self.timestamps[0])
 
             # Initialise the direction vectors
             dirs = torch.empty((self.nb_azimuths, 2), device=self.device)
@@ -1036,7 +1045,7 @@ class GPStateEstimator:
 
         # Create image with radar cartesian raw, the odd and even images and the disparity image
         sub_size = img_size#cartesian_img_odd.shape[0]
-        img = np.zeros((2*sub_size, 3*sub_size, 3), dtype=np.uint8)
+        img = np.zeros((sub_size, 2*sub_size, 3), dtype=np.uint8)
         img[:sub_size, :sub_size, :] = cv2.cvtColor(radar_cartesian*255, cv2.COLOR_GRAY2BGR).astype(np.uint8)
         if self.doppler_radar:
             img[:sub_size, sub_size:2*sub_size, :] = cv2.cvtColor((cartesian_img_odd)*255, cv2.COLOR_GRAY2BGR).astype(np.uint8)
@@ -1046,7 +1055,7 @@ class GPStateEstimator:
         # Add the velocity vector to the images (arrow or line over the cartesian images)
         velocity = self.state_init[:2].cpu().numpy()
         kScaleArrow = 5 
-        cv2.arrowedLine(img, (int(sub_size/2), int(3*sub_size/2)), (int(sub_size/2 + velocity[1]*kScaleArrow), int(3*sub_size/2 - velocity[0]*kScaleArrow)), vel_color, 2)
+        #cv2.arrowedLine(img, (int(sub_size/2), int(sub_size/2)), (int(sub_size/2 + velocity[1]*kScaleArrow), int(sub_size/2 - velocity[0]*kScaleArrow)), vel_color, 2)
 
         # Add text legend to the image
         if text:
@@ -1061,8 +1070,8 @@ class GPStateEstimator:
             resized_local_map = resized_local_map.clip(0, 255).astype(np.uint8)
             if inverted:
                 resized_local_map = 255 - resized_local_map
-            img[sub_size:, 2*sub_size:, :] = resized_local_map.reshape((resized_local_map.shape[0], resized_local_map.shape[1], 1)).repeat(3, axis=2)
-            cv2.arrowedLine(img, (int(5*sub_size/2), int(3*sub_size/2)), (int(5*sub_size/2 + velocity[1]*kScaleArrow), int(3*sub_size/2 - velocity[0]*kScaleArrow)), vel_color, 2)
+            img[:, sub_size:, :] = resized_local_map.reshape((resized_local_map.shape[0], resized_local_map.shape[1], 1)).repeat(3, axis=2)
+            cv2.arrowedLine(img, (int(3*sub_size/2), int(sub_size/2)), (int(3*sub_size/2 + velocity[1]*kScaleArrow), int(sub_size/2 - velocity[0]*kScaleArrow)), vel_color, 2)
             if text:
                 cv2.putText(img, 'Local map', (10+2*img_size, 20+img_size), cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1, cv2.LINE_AA)
         else:
