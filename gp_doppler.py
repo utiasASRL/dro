@@ -185,11 +185,6 @@ class GPStateEstimator:
     # Forces the max range indices to be within the available radar scan bins
     def clampRangeToData_(self, nb_bins_available):
         if self.use_direct and int(self.max_range_idx_direct) > nb_bins_available:
-            if not self.warned_direct_range_clamp:
-                print("Warning: 'direct.max_range' implies " + str(int(self.max_range_idx_direct)) +
-                      " range bins, but the radar scan only has " + str(nb_bins_available) +
-                      ". Clamping to the available range.")
-                self.warned_direct_range_clamp = True
             self.max_range_idx_direct = torch.tensor(nb_bins_available).to(self.device)
             self.range_vec = torch.arange(self.max_range_idx_direct).to(self.device).float() * self.radar_res + (self.radar_res / 2.0)
             if int(self.min_range_idx_direct) >= int(self.max_range_idx_direct):
@@ -198,11 +193,6 @@ class GPStateEstimator:
                                   "lower 'direct.min_range' and/or 'direct.max_range' in the config.")
 
         if int(self.max_range_idx) > nb_bins_available:
-            if not self.warned_doppler_range_clamp:
-                print("Warning: 'doppler.max_range' implies " + str(int(self.max_range_idx)) +
-                      " range bins, but the radar scan only has " + str(nb_bins_available) +
-                      ". Clamping to the available range.")
-                self.warned_doppler_range_clamp = True
             self.max_range_idx = torch.tensor(nb_bins_available).to(self.device)
             if int(self.min_range_idx) >= int(self.max_range_idx):
                 raise ValueError("'doppler.min_range' is beyond the range covered by the radar scan "
