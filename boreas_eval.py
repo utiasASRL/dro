@@ -103,6 +103,11 @@ sequence_type = {
         "warthog-woody-3" : "Woody",
         "warthog-woody-4" : "Woody",
         "warthog-woody-5" : "Woody",
+        "warthog-grassy-1" : "Grassy",
+        "warthog-grassy-2" : "Grassy",
+        "warthog-grassy-3" : "Grassy",
+        "warthog-grassy-4" : "Grassy",
+        "warthog-grassy-5" : "Grassy",
         # '' : 'Unknown'
 }
 
@@ -215,12 +220,26 @@ def compute_kitti_metrics(
 
         # 2d
         err, path_lengths = calc_sequence_errors(T_gt_seq, T_pred_seq, step_size, 2)
+        # Remove the lenghts that have an entry in the err
+        lenghts_present = []
+        for e in err:
+            if e is not None:
+                lenghts_present.append(e[3])
+        # get the unique path lengths that have an entry in the err
+        lengths_present = np.unique(lenghts_present)
+        path_lengths = [l for l in path_lengths if l in lengths_present]
         t_err_2d, r_err_2d, _, _ = get_stats(err, path_lengths)
 
         err_2d_per_frame, err_stats_2d = get_stats_per_frame(err, path_lengths)
 
         # 3d
         err, path_lengths = calc_sequence_errors(T_gt_seq, T_pred_seq, step_size)
+        lengths_present = []
+        for e in err:
+            if e is not None:
+                lengths_present.append(e[3])
+        lengths_present = np.unique(lengths_present)
+        path_lengths = [l for l in path_lengths if l in lengths_present]
         t_err, r_err, t_err_len, r_err_len = get_stats(err, path_lengths)
 
         err_3d_per_frame, err_stats_3d = get_stats_per_frame(err, path_lengths)
