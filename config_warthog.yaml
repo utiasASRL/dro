@@ -1,0 +1,59 @@
+data:
+  multi_sequence: false  # If true, the data path contains multiple sequences like data_path/{boereas-xxxx-xx-xx-xx-xx; boreas-yyyy-yy-yy-yy-yy; ...}
+  data_path: '/home/dl/Documents/phd/repos/dro/data/warthog-grassy-3'
+  # data_path: '/home/dl/Documents/phd/data/boreas/boreas-2024-12-04-14-34'
+  #multi_sequence: false  # If false, the path should point to a single sequence like
+  #data_path: '/home/ced/Documents/data/boreas/doppler/rss/test/boreas-2020-12-01-13-26'
+                        
+
+estimation:
+  doppler_cost: false
+  direct_cost: true
+  use_gyro: false
+  max_acceleration: 10.0 # m/s^2 This is used to detect failure modes due to too many outliers. The number 6.0 comes for the max performance of a car that is 0-100 in less than 2.4s (high performance car)
+  # The following parameters are used to compensate for a bias in the doppler velocity. WARNING, the code assumes that x is forward
+  vy_bias_prior: 0.11
+  estimate_doppler_vy_bias: true
+  T_axle_radar: [[ 0.99938287,  0.03512667,  0.        ,  0.51      ],
+                  [ 0.03512667, -0.99938287,  0.        ,  0.        ],
+                  [ 0.        ,  0.       ,  -1.        ,  1.945     ],
+                  [ 0.        ,  0.       ,   0.        ,  1.        ]]
+  ang_vel_bias: 0.000 #0.0006 for Suburbs and Highway, 0.001 for Tunnel
+  gyro_bias_estimation: false
+
+gp:
+  lengthscale_az: 1.0
+  lengthscale_range: 1.0
+  sz: 0.6
+
+radar:
+  ft: 76.04E9
+  meas_freq: 1600.0
+  del_f: 893.0E6
+  beta_corr_fact: 0.944
+  range_offset: -0.32
+  doppler_enabled: false
+  encoder_bin_size: 16000
+  chirp_up: true
+  resolution: 0.040308
+
+imu:
+  min_time_bias_init: 3.0
+  type: 'dmu'
+
+doppler:
+  min_range: 4.0
+  max_range: 69.0
+
+direct:
+  min_range: 4.0
+  max_range: 69.0
+  max_local_map_range: 80.0
+  local_map_res: 0.1
+  local_map_update_alpha: 0.25 # The local map is updated as (1-alpha)*prev_map + alpha*current_scan
+
+log:
+  verbose: false
+  display: false
+  save_images: false
+
