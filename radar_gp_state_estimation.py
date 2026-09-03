@@ -260,7 +260,7 @@ def main():
             # Dirty way to account for the offset
             offset = config['radar']['range_offset'] / radar_frame.resolution
             if offset > 0:
-                polar_img = np.concatenate(np.zeros((polar_img.shape[0], int(np.round(offset)))), polar_img, axis=1)
+                polar_img = np.concatenate((np.zeros((polar_img.shape[0], int(np.round(offset)))), polar_img), axis=1)
             elif offset < 0:
                 polar_img = polar_img[:, int(np.round(-offset)):]
                 
@@ -318,8 +318,16 @@ def main():
             vel_pd[2] = vel_pd[2].astype(int)
             vel_pd[1] = radar_frame.timestamps.min()
             vel_pd[2] = radar_frame.timestamps.max()
+            if motion_model == 'const_vel_const_w':
+                # Concatenate the angular velocity to the velocity DataFrame
+                vel_pd = pd.concat([vel_pd, pd.DataFrame(np.array([state[2]]).reshape(1, -1))], axis=1)
             if not os.path.exists(other_log_path + '/velocity.csv'):
-                vel_pd.to_csv(other_log_path + '/velocity.csv', header=['timestamp_scan (s)', 'timestamp_min (us)', 'timestamp_max (us)', 'vx', 'vy'], index=None)
+                # If the angular velocity is estimated
+                if motion_model == 'const_vel_const_w':
+                    vel_pd.to_csv(other_log_path + '/velocity.csv', header=['timestamp_scan (s)', 'timestamp_min (us)', 'timestamp_max (us)', 'vx', 'vy', 'omega'], index=None)
+                else:
+                    vel_pd.to_csv(other_log_path + '/velocity.csv', header=['timestamp_scan (s)', 'timestamp_min (us)', 'timestamp_max (us)', 'vx', 'vy'], index=None)
+                    
             else:
                 vel_pd.to_csv(other_log_path + '/velocity.csv', mode='a', header=False, index=None)
 
@@ -416,12 +424,12 @@ def main():
                     est_xy = np.array(est_xyz)
                     gt_xy = np.array(gt_xyz)
                     if est_display is None:
-                        est_display, = ax.plot(est_xy[:,0], est_xy[:,1], 'b-', label='Estimate')
+                        est_display, = ax.plot(est_xy[:,0], est_xy[:,1], 'b-', label='Estimate', linewidth=2)
                     else:
                         est_display.set_xdata(est_xy[:,0])
                         est_display.set_ydata(est_xy[:,1])
                     if gt_display is None:
-                        gt_display, = ax.plot(gt_xy[:,0], gt_xy[:,1], 'r--', label='GT')
+                        gt_display, = ax.plot(gt_xy[:,0], gt_xy[:,1], 'r-', label='GT', linewidth=1)
                         ax.scatter(gt_xy[:,0], gt_xy[:,1], marker='s', color='k', s=100, label='Sequence start')
                         ax.legend()
                     else:
