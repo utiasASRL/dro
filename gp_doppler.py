@@ -182,6 +182,34 @@ class GPStateEstimator:
             self.kImgPadding = torch.tensor(self.kImgPadding).to(self.device)
 
 
+    # Forces the max range indices to be within the available radar scan bins
+    def clampRangeToData_(self, nb_bins_available):
+        if self.use_direct and int(self.max_range_idx_direct) > nb_bins_available:
+            if not self.warned_direct_range_clamp:
+                print("Warning: 'direct.max_range' implies " + str(int(self.max_range_idx_direct)) +
+                      " range bins, but the radar scan only has " + str(nb_bins_available) +
+                      ". Clamping to the available range.")
+                self.warned_direct_range_clamp = True
+            self.max_range_idx_direct = torch.tensor(nb_bins_available).to(self.device)
+            self.range_vec = torch.arange(self.max_range_idx_direct).to(self.device).float() * self.radar_res + (self.radar_res / 2.0)
+            if int(self.min_range_idx_direct) >= int(self.max_range_idx_direct):
+                raise ValueError("'direct.min_range' is beyond the range covered by the radar scan "
+                                  "once 'direct.max_range' is clamped to the available data; "
+                                  "lower 'direct.min_range' and/or 'direct.max_range' in the config.")
+
+        if int(self.max_range_idx) > nb_bins_available:
+            if not self.warned_doppler_range_clamp:
+                print("Warning: 'doppler.max_range' implies " + str(int(self.max_range_idx)) +
+                      " range bins, but the radar scan only has " + str(nb_bins_available) +
+                      ". Clamping to the available range.")
+                self.warned_doppler_range_clamp = True
+            self.max_range_idx = torch.tensor(nb_bins_available).to(self.device)
+            if int(self.min_range_idx) >= int(self.max_range_idx):
+                raise ValueError("'doppler.min_range' is beyond the range covered by the radar scan "
+                                  "once 'doppler.max_range' is clamped to the available data; "
+                                  "lower 'doppler.min_range' and/or 'doppler.max_range' in the config.")
+
+
     def seKernel_(self, X1, X2, l_az, l_range):
         temp_X1 = X1.copy()
         temp_X2 = X2.copy()
@@ -663,7 +691,7 @@ class GPStateEstimator:
             if not degraded:
                 vel, _, _ = self.motion_model.getVelPosRot(state, with_jac=False)
                 self.previous_vel = torch.norm(vel[-1,:])
-                self.max_diff_vel = self.motion_model.time[-1] * self.max_acc
+                self.max_diff_vel = self.delta_time * self.max_acc
             
             
 
@@ -712,14 +740,15 @@ class GPStateEstimator:
     def odometryStep(self, polar_image, azimuths, timestamps, chirp_up=True):
         with torch.no_grad():
             self.chirp_up = chirp_up
+            self.clampRangeToData_(polar_image.shape[1])
             if self.timestamps is None:
-                last_scan_time = timestamps[0] - (timestamps[-1] - timestamps[0]) 
-                self.max_diff_vel = self.max_acc * (timestamps[-1] - timestamps[0]) * 10e-6
+                last_scan_time = timestamps[0] - (timestamps[-1] - timestamps[0])
+                self.max_diff_vel = self.max_acc * (timestamps[-1] - timestamps[0]) * 1e-6
             else:
-                last_scan_time = self.timestamps[0]
+                last_scan_time = self.timestamps[0].item()
             self.timestamps = torch.tensor(timestamps).to(self.device).squeeze()
-            delta_time = 0.25#(self.timestamps[0] - last_scan_time)*10e-6
-
+            delta_time = (timestamps[0] - last_scan_time) * 1e-6
+            self.delta_time = delta_time
             # Update the pose and the local map (if needed)
             if self.pose_estimation:
 
