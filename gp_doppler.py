@@ -70,6 +70,11 @@ class GPStateEstimator:
 
             self.vy_bias = torch.tensor(opts['estimation']['vy_bias_prior']).to(self.device)
 
+            if self.use_doppler and self.use_direct and ((opts['doppler']['max_range'] < opts['direct']['max_range'])):
+                print("Warning: Doppler max range is less than direct max range.")
+                print("Setting doppler max range to match direct max range.")
+                opts['doppler']['max_range'] = opts['direct']['max_range']
+
 
             # Initialise the GP parameters
             kNeighbourhoodFactor = 1.0
@@ -961,13 +966,19 @@ class GPStateEstimator:
 
 
     # Get the Doppler velocity separately from the odometry step for the tuning of lateral velocity bias
-    def getDopplerVelocity(self):
+    # (vel_init optionally overrides the seed of the optimisation with a given [vx, vy], e.g. the GT velocity)
+    def getDopplerVelocity(self, vel_init=None):
         if not self.use_doppler:
             raise ValueError("Doppler not used")
-        
+
+        state_init = self.state_init
+        if vel_init is not None:
+            state_init = self.state_init.clone()
+            state_init[:2] = torch.tensor(np.asarray(vel_init).flatten()[:2]).to(self.device)
+
         save_use_direct = self.use_direct
         self.use_direct = False
-        result = self.solve_(self.state_init, 250, 1e-6, 1e-5)
+        result = self.solve_(state_init, 250, 1e-6, 1e-5)
 
         self.use_direct = save_use_direct
         return result[:2].detach().cpu().numpy()
@@ -1047,10 +1058,10 @@ class GPStateEstimator:
         sub_size = img_size#cartesian_img_odd.shape[0]
         img = np.zeros((sub_size, 2*sub_size, 3), dtype=np.uint8)
         img[:sub_size, :sub_size, :] = cv2.cvtColor(radar_cartesian*255, cv2.COLOR_GRAY2BGR).astype(np.uint8)
-        if self.doppler_radar:
-            img[:sub_size, sub_size:2*sub_size, :] = cv2.cvtColor((cartesian_img_odd)*255, cv2.COLOR_GRAY2BGR).astype(np.uint8)
-            img[:sub_size, 2*sub_size:, :] = cv2.cvtColor((cartesian_img_even)*255, cv2.COLOR_GRAY2BGR).astype(np.uint8)
-            img[sub_size:, :sub_size, :] = diff_img.astype(np.uint8)
+        #if self.doppler_radar:
+        #    img[:sub_size, sub_size:2*sub_size, :] = cv2.cvtColor((cartesian_img_odd)*255, cv2.COLOR_GRAY2BGR).astype(np.uint8)
+        #    img[:sub_size, 2*sub_size:, :] = cv2.cvtColor((cartesian_img_even)*255, cv2.COLOR_GRAY2BGR).astype(np.uint8)
+        #    img[sub_size:, :sub_size, :] = diff_img.astype(np.uint8)
 
         # Add the velocity vector to the images (arrow or line over the cartesian images)
         velocity = self.state_init[:2].cpu().numpy()

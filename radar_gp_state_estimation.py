@@ -75,6 +75,13 @@ def main():
     opts['log'].setdefault('save_local_maps', False)
     opts['log'].setdefault('save_scans', False)
 
+    # Debug: log the Doppler-only velocity at every step (doubles the optimisation time)
+    opts['log'].setdefault('log_doppler_velocity', False)
+    log_doppler_velocity = opts['log']['log_doppler_velocity'] and config['estimation']['doppler_cost']
+    # Seed the debug Doppler-only optimisation with the GT velocity (requires GT, Boreas only)
+    opts['log'].setdefault('doppler_velocity_gt_seed', False)
+    doppler_velocity_gt_seed = opts['log']['doppler_velocity_gt_seed']
+
 
 
     # Prepare for the vy bias estimation
@@ -276,7 +283,8 @@ def main():
                 state_estimator.vy_bias = 0.0
                 doppler_vel = state_estimator.getDopplerVelocity()
                 doppler_vel = np.concatenate([doppler_vel, [0]])
-                print("\nDoppler velocity: ", doppler_vel)
+                if verbose:
+                    print("\nDoppler velocity: ", doppler_vel)
                 if use_gyro:
                     # Get the average angular velocity between the first and last azimuth
                     gyro_idx = np.logical_and(imu_time >= radar_frame.timestamps[0]*1e-6, imu_time <= radar_frame.timestamps[-1]*1e-6)
@@ -292,7 +300,7 @@ def main():
                 vy = (T_axle_radar[:3,:3].T@(np.array([0, axle_vel[1], 0])))[1]
                 vy_bias = vy_bias_alpha * vy + (1-vy_bias_alpha) * vy_bias
                 state_estimator.vy_bias = vy_bias
-            if estimate_vy_bias:
+            if estimate_vy_bias and verbose:
                 print("\nVy bias: ", vy_bias)
 
             time_end = time.time()
@@ -303,6 +311,27 @@ def main():
                 opti_time_sum = (time_end - time_start)*5
             opti_time_sum += time_end - time_start
 
+
+            # Debug: run the Doppler-only estimation and log it
+            # (the DRO velocity of the same scan is in velocity.csv, same row order)
+            if log_doppler_velocity:
+                # Optionally seed the optimisation with the GT velocity instead of the DRO estimate
+                # (tells appart a local minimum issue from a cost function issue)
+                vel_seed = radar_frame.body_rate[:2].flatten() if doppler_velocity_gt_seed else None
+                doppler_only_vel = state_estimator.getDopplerVelocity(vel_seed)
+                doppler_pd = pd.DataFrame(np.array([[radar_frame.timestamp,
+                                                     radar_frame.timestamps.min(),
+                                                     radar_frame.timestamps.max(),
+                                                     doppler_only_vel[0], doppler_only_vel[1]]]))
+                doppler_pd[1] = radar_frame.timestamps.min()
+                doppler_pd[2] = radar_frame.timestamps.max()
+                doppler_log_file = other_log_path + '/doppler_velocity.csv'
+                if not os.path.exists(doppler_log_file):
+                    doppler_pd.to_csv(doppler_log_file, header=['timestamp_scan (s)', 'timestamp_min (us)', 'timestamp_max (us)', 'vx', 'vy'], index=None)
+                else:
+                    doppler_pd.to_csv(doppler_log_file, mode='a', header=False, index=None)
+                if verbose:
+                    print("\nDoppler-only velocity: ", doppler_only_vel)
 
             # Display information
             if verbose:
