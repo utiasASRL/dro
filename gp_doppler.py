@@ -44,6 +44,10 @@ class GPStateEstimator:
             else:
                 self.optimisation_first_step = 0.1
 
+            # Finite difference steps used for the Hessian of the direct cost (diagnostic only)
+            self.hessian_fd_step = float(opts.get('estimation', {}).get('hessian_fd_step', 0.05))
+            self.hessian_fd_step_ang = float(opts.get('estimation', {}).get('hessian_fd_step_ang', 0.005))
+
             # Load the motion model
             self.use_doppler = torch.tensor(opts['estimation']['doppler_cost']).to(self.device)
             self.use_direct = torch.tensor(opts['estimation']['direct_cost']).to(self.device)
@@ -69,6 +73,25 @@ class GPStateEstimator:
             self.pose_estimation = self.use_gyro or self.estimate_ang_vel
 
             self.vy_bias = torch.tensor(opts['estimation']['vy_bias_prior']).to(self.device)
+
+            # Optionally weight the whole Doppler cost with the curvature of the direct cost
+            # (the Hessian is computed every 'hessian_update_distance' meters of travelled distance)
+            self.doppler_hessian_weighting = bool(opts['estimation'].get('doppler_hessian_weighting', False))
+            self.hessian_update_distance = float(opts['estimation'].get('hessian_update_distance', 15.0))
+            self.hessian_weight_threshold = float(opts['estimation'].get('hessian_weight_threshold', -25.0))
+            self.hessian_weight_full = float(opts['estimation'].get('hessian_weight_full', -10.0))
+            if self.hessian_weight_full <= self.hessian_weight_threshold:
+                raise ValueError("'estimation.hessian_weight_full' must be greater than 'estimation.hessian_weight_threshold'")
+            if self.doppler_hessian_weighting and not (self.use_doppler and self.use_direct):
+                print("Warning: Doppler Hessian weighting requires both the Doppler and direct cost functions.")
+                print("Disabling the Doppler Hessian weighting.")
+                self.doppler_hessian_weighting = False
+            self.travelled_distance = 0.0
+            self.last_hessian_distance = None
+            self.hessian_eigen_values = None
+            self.hessian_updated = False
+            self.doppler_weight = 1.0
+            self.doppler_weight_cbrt = 1.0
 
             if self.use_doppler and self.use_direct and ((opts['doppler']['max_range'] < opts['direct']['max_range'])):
                 print("Warning: Doppler max range is less than direct max range.")
@@ -177,6 +200,10 @@ class GPStateEstimator:
             self.bin_vec = torch.arange(self.nb_bins, device=self.device).int()
 
             self.step_counter = 0
+
+            # Number of non-zero values used by each cost function (for logging)
+            self.nb_doppler_residuals = 0
+            self.nb_direct_residuals = 0
 
 
             if 'const_w' in opts['estimation']['motion_model']:
@@ -391,6 +418,12 @@ class GPStateEstimator:
                 jacobian = aligned_odd_coeff_sparse.reshape((-1, 1, 1)) @ d_shift_d_state[self.doppler_az_ids_sparse,:,:] * (self.temp_even_img_sparse.unsqueeze(-1).unsqueeze(-1))
                 residual = residual.flatten()
                 jacobian = jacobian.reshape((-1,state_size))
+
+                # Weight the whole Doppler cost with the curvature of the direct cost
+                if direct and self.doppler_hessian_weighting:
+                    residual = residual * self.doppler_weight_cbrt
+                    jacobian = jacobian * self.doppler_weight_cbrt
+
                 if degraded:
                     weights = ((torch.clip(torch.abs(interp_sparse - self.temp_even_img_sparse), 0, 1) - 1)**6 ).flatten().unsqueeze(-1)
                     jacobian = jacobian * weights
@@ -687,8 +720,8 @@ class GPStateEstimator:
                 vel, _, _ = self.motion_model.getVelPosRot(state, with_jac=False)
                 self.previous_vel = torch.norm(vel[-1,:])
                 self.max_diff_vel = self.delta_time * self.max_acc
-            
-            
+
+
 
             return state
 
@@ -764,6 +797,7 @@ class GPStateEstimator:
                     rot_mat = torch.tensor([[torch.cos(self.current_rot), -torch.sin(self.current_rot)], [torch.sin(self.current_rot), torch.cos(self.current_rot)]]).to(self.device)
                     self.current_pos = self.current_pos + rot_mat @ frame_pos.double()
                     self.current_rot = self.current_rot + frame_rot.double()
+                    self.travelled_distance += float(torch.norm(frame_pos))
                     if isinstance(self.motion_model, ConstVelConstW):
                         self.current_rot -= self.ang_vel_bias* delta_time
                     
@@ -959,26 +993,130 @@ class GPStateEstimator:
 
             self.state_init = result.clone()
 
+            # Store the number of non-zero values effectively used by each cost function
+            # (the size of the residual vectors of the registration)
+            self.nb_doppler_residuals = int(self.temp_even_img_sparse.shape[0]) if self.use_doppler else 0
+            self.nb_direct_residuals = int(self.direct_nb_non_zero) if (self.use_direct and self.step_counter > 0) else 0
+
+            # Update the Hessian of the direct cost every 'hessian_update_distance' travelled meters
+            # (and the weight of the Doppler cost that is derived from it)
+            self.hessian_updated = False
+            if self.doppler_hessian_weighting and self.nb_direct_residuals > 0:
+                if (self.last_hessian_distance is None) or ((self.travelled_distance - self.last_hessian_distance) >= self.hessian_update_distance):
+                    eigen_values = self.getDirectCostHessianEigenValues()
+                    if eigen_values is not None:
+                        self.hessian_eigen_values = eigen_values
+                        self.hessian_updated = True
+                        self.last_hessian_distance = self.travelled_distance
+                        if self.doppler_hessian_weighting:
+                            self.updateDopplerWeight_()
+
             self.prev_chirp_up = chirp_up
             self.step_counter += 1
             return result.detach().cpu().numpy()
 
 
 
+    # Cost of the direct cost function alone (the quantity maximised by the solver)
+    def directCost_(self, state):
+        with torch.no_grad():
+            res, _ = self.costFunctionAndJacobian_(state, False, True)
+            return torch.sum(res**3)
+
+
+    # Hessian of the direct-only cost with respect to the state, computed by central finite
+    # differences around the given state (the converged one of the last scan by default)
+    def getDirectCostHessian(self, state=None):
+        with torch.no_grad():
+            # No direct cost for the last scan (direct cost disabled or no local map yet)
+            if self.nb_direct_residuals == 0:
+                return None
+
+            if state is None:
+                state = self.state_init
+            state = state.clone()
+            state_size = int(self.motion_model.state_size)
+
+            # Finite difference step of each component of the state
+            steps = torch.full((state_size,), self.hessian_fd_step, device=self.device, dtype=state.dtype)
+            if isinstance(self.motion_model, ConstVelConstW):
+                steps[2] = self.hessian_fd_step_ang
+
+            # Central differences: f(x+h) - 2f(x) + f(x-h) for the diagonal terms and
+            # f(x+hi+hj) - f(x+hi-hj) - f(x-hi+hj) + f(x-hi-hj) for the off-diagonal ones
+            hessian = torch.zeros((state_size, state_size), device=self.device, dtype=state.dtype)
+            cost = self.directCost_(state)
+            for i in range(state_size):
+                state_p = state.clone()
+                state_p[i] += steps[i]
+                state_m = state.clone()
+                state_m[i] -= steps[i]
+                hessian[i,i] = (self.directCost_(state_p) - 2.0*cost + self.directCost_(state_m)) / (steps[i]**2)
+
+                for j in range(i+1, state_size):
+                    state_pp = state.clone()
+                    state_pp[i] += steps[i]
+                    state_pp[j] += steps[j]
+                    state_pm = state.clone()
+                    state_pm[i] += steps[i]
+                    state_pm[j] -= steps[j]
+                    state_mp = state.clone()
+                    state_mp[i] -= steps[i]
+                    state_mp[j] += steps[j]
+                    state_mm = state.clone()
+                    state_mm[i] -= steps[i]
+                    state_mm[j] -= steps[j]
+                    hessian[i,j] = (self.directCost_(state_pp) - self.directCost_(state_pm)
+                                    - self.directCost_(state_mp) + self.directCost_(state_mm)) / (4.0*steps[i]*steps[j])
+                    hessian[j,i] = hessian[i,j]
+
+            return hessian
+
+
+    # Weight of the Doppler cost from the largest eigenvalue of the Hessian of the direct cost:
+    # 1 above 'hessian_weight_full' (the direct cost barely constrains that direction),
+    # 0 below 'hessian_weight_threshold' (the direct cost is well constrained), linear in between
+    def updateDopplerWeight_(self):
+        max_eigen_value = float(np.max(self.hessian_eigen_values))
+        weight = (max_eigen_value - self.hessian_weight_threshold) / (self.hessian_weight_full - self.hessian_weight_threshold)
+        self.doppler_weight = float(np.clip(weight, 0.0, 1.0))
+        # The cost is the sum of the cubed residuals, so the residuals are scaled by the cube
+        # root of the weight for the Doppler cost (and its gradient) to be scaled by the weight
+        self.doppler_weight_cbrt = self.doppler_weight ** (1.0/3.0)
+
+
+    # Weight of the Doppler cost of the last scan
+    def getDopplerWeight(self):
+        return self.doppler_weight
+
+
+    # Eigenvalues of the last computed Hessian of the direct cost (None if never computed)
+    def getLastHessianEigenValues(self):
+        return self.hessian_eigen_values
+
+
+    # Eigenvalues (in increasing order) of the Hessian of the direct-only cost
+    # (at a maximum of the cost, they are expected to be all negative)
+    def getDirectCostHessianEigenValues(self, state=None):
+        hessian = self.getDirectCostHessian(state)
+        if hessian is None:
+            return None
+        return torch.linalg.eigvalsh(hessian).detach().cpu().numpy()
+
+
+    # Number of non-zero values used by the last registration (size of the residual vectors)
+    def getNbResiduals(self):
+        return self.nb_doppler_residuals, self.nb_direct_residuals
+
+
     # Get the Doppler velocity separately from the odometry step for the tuning of lateral velocity bias
-    # (vel_init optionally overrides the seed of the optimisation with a given [vx, vy], e.g. the GT velocity)
-    def getDopplerVelocity(self, vel_init=None):
+    def getDopplerVelocity(self):
         if not self.use_doppler:
             raise ValueError("Doppler not used")
 
-        state_init = self.state_init
-        if vel_init is not None:
-            state_init = self.state_init.clone()
-            state_init[:2] = torch.tensor(np.asarray(vel_init).flatten()[:2]).to(self.device)
-
         save_use_direct = self.use_direct
         self.use_direct = False
-        result = self.solve_(state_init, 250, 1e-6, 1e-5)
+        result = self.solve_(self.state_init, 250, 1e-6, 1e-5)
 
         self.use_direct = save_use_direct
         return result[:2].detach().cpu().numpy()

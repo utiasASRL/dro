@@ -75,13 +75,6 @@ def main():
     opts['log'].setdefault('save_local_maps', False)
     opts['log'].setdefault('save_scans', False)
 
-    # Debug: log the Doppler-only velocity at every step (doubles the optimisation time)
-    opts['log'].setdefault('log_doppler_velocity', False)
-    log_doppler_velocity = opts['log']['log_doppler_velocity'] and config['estimation']['doppler_cost']
-    # Seed the debug Doppler-only optimisation with the GT velocity (requires GT, Boreas only)
-    opts['log'].setdefault('doppler_velocity_gt_seed', False)
-    doppler_velocity_gt_seed = opts['log']['doppler_velocity_gt_seed']
-
 
 
     # Prepare for the vy bias estimation
@@ -312,27 +305,6 @@ def main():
             opti_time_sum += time_end - time_start
 
 
-            # Debug: run the Doppler-only estimation and log it
-            # (the DRO velocity of the same scan is in velocity.csv, same row order)
-            if log_doppler_velocity:
-                # Optionally seed the optimisation with the GT velocity instead of the DRO estimate
-                # (tells appart a local minimum issue from a cost function issue)
-                vel_seed = radar_frame.body_rate[:2].flatten() if doppler_velocity_gt_seed else None
-                doppler_only_vel = state_estimator.getDopplerVelocity(vel_seed)
-                doppler_pd = pd.DataFrame(np.array([[radar_frame.timestamp,
-                                                     radar_frame.timestamps.min(),
-                                                     radar_frame.timestamps.max(),
-                                                     doppler_only_vel[0], doppler_only_vel[1]]]))
-                doppler_pd[1] = radar_frame.timestamps.min()
-                doppler_pd[2] = radar_frame.timestamps.max()
-                doppler_log_file = other_log_path + '/doppler_velocity.csv'
-                if not os.path.exists(doppler_log_file):
-                    doppler_pd.to_csv(doppler_log_file, header=['timestamp_scan (s)', 'timestamp_min (us)', 'timestamp_max (us)', 'vx', 'vy'], index=None)
-                else:
-                    doppler_pd.to_csv(doppler_log_file, mode='a', header=False, index=None)
-                if verbose:
-                    print("\nDoppler-only velocity: ", doppler_only_vel)
-
             # Display information
             if verbose:
                 print("\n")
@@ -359,6 +331,33 @@ def main():
                     
             else:
                 vel_pd.to_csv(other_log_path + '/velocity.csv', mode='a', header=False, index=None)
+
+            # Log the number of non-zero values used by each cost function of the registration
+            # (the size of the Doppler and direct parts of the residual vector)
+            nb_doppler_res, nb_direct_res = state_estimator.getNbResiduals()
+            nb_res_pd = pd.DataFrame({0: [radar_frame.timestamp], 1: [nb_doppler_res], 2: [nb_direct_res]})
+            nb_res_file = other_log_path + '/nb_residuals.csv'
+            if not os.path.exists(nb_res_file):
+                nb_res_pd.to_csv(nb_res_file, header=['timestamp_scan (s)', 'nb_doppler', 'nb_direct'], index=None)
+            else:
+                nb_res_pd.to_csv(nb_res_file, mode='a', header=False, index=None)
+            if verbose:
+                print("Nb residuals (doppler / direct): ", nb_doppler_res, " / ", nb_direct_res)
+
+            # Log the eigenvalues of the Hessian of the direct-only cost on the scans where
+            # it has been computed (this does not trigger any computation on its own)
+            if state_estimator.hessian_updated:
+                eigen_values = state_estimator.getLastHessianEigenValues()
+                if eigen_values is not None:
+                    hessian_pd = pd.DataFrame(np.concatenate([[radar_frame.timestamp], eigen_values]).reshape(1, -1))
+                    hessian_log_file = other_log_path + '/direct_hessian_eigenvalues.csv'
+                    if not os.path.exists(hessian_log_file):
+                        header = ['timestamp_scan (s)'] + ['eigenvalue_' + str(k) for k in range(len(eigen_values))]
+                        hessian_pd.to_csv(hessian_log_file, header=header, index=None)
+                    else:
+                        hessian_pd.to_csv(hessian_log_file, mode='a', header=False, index=None)
+                    if verbose:
+                        print("Direct cost Hessian eigenvalues: ", eigen_values, " -> Doppler weight: ", state_estimator.getDopplerWeight())
 
             # Store the biases
             if use_gyro:
