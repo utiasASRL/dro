@@ -19,6 +19,10 @@ estimation:
                   [ 0.        ,  0.       ,  -1.        ,  1.945     ],
                   [ 0.        ,  0.       ,   0.        ,  1.        ]]
 
+  doppler_hessian_weighting: false
+  hessian_update_distance: 15.0 # Travelled distance between two Hessian computations (m)
+  hessian_weight_full: -5.0 # Largest eigenvalue above which the Doppler cost is fully used
+  hessian_weight_threshold: -6.0 # Largest eigenvalue below which the Doppler cost is fully removed
 
 gp:
   lengthscale_az: 1.0
