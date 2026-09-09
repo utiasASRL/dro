@@ -126,6 +126,9 @@ def main():
         gt_xyz = []
         est_xyz = []
         biases = []
+        velocity_log = []
+        doppler_diff_log = []
+        odom_2d_log = []
 
         # If using the gyro, we need to load the IMU data
         if use_gyro:
@@ -276,7 +279,8 @@ def main():
                 state_estimator.vy_bias = 0.0
                 doppler_vel = state_estimator.getDopplerVelocity()
                 doppler_vel = np.concatenate([doppler_vel, [0]])
-                print("\nDoppler velocity: ", doppler_vel)
+                if verbose:
+                    print("\nDoppler velocity: ", doppler_vel)
                 if use_gyro:
                     # Get the average angular velocity between the first and last azimuth
                     gyro_idx = np.logical_and(imu_time >= radar_frame.timestamps[0]*1e-6, imu_time <= radar_frame.timestamps[-1]*1e-6)
@@ -298,19 +302,15 @@ def main():
                 temp_doppler_vel = doppler_vel.copy()
                 temp_doppler_vel[:2] -= vy_bias
                 vel_diff = temp_doppler_vel[:2] - velocity
-                print("Doppler-only vs DRO velocity diff: ", vel_diff, " (norm: ", np.linalg.norm(vel_diff), ")")
-                diff_pd = pd.DataFrame(np.array([[radar_frame.timestamp,
-                                                  temp_doppler_vel[0], temp_doppler_vel[1],
-                                                  velocity[0], velocity[1],
-                                                  vel_diff[0], vel_diff[1],
-                                                  np.linalg.norm(vel_diff),
-                                                  vy_bias]]))
-                diff_log_file = other_log_path + '/doppler_vs_dro_velocity.csv'
-                if not os.path.exists(diff_log_file):
-                    diff_pd.to_csv(diff_log_file, header=['timestamp_scan (s)', 'doppler_vx_corrected', 'doppler_vy_corrected', 'dro_vx', 'dro_vy', 'diff_vx', 'diff_vy', 'diff_norm', 'vy_bias'], index=None)
-                else:
-                    diff_pd.to_csv(diff_log_file, mode='a', header=False, index=None)
-            if estimate_vy_bias:
+                if verbose:
+                    print("Doppler-only vs DRO velocity diff: ", vel_diff, " (norm: ", np.linalg.norm(vel_diff), ")")
+                doppler_diff_log.append((radar_frame.timestamp,
+                                          temp_doppler_vel[0], temp_doppler_vel[1],
+                                          velocity[0], velocity[1],
+                                          vel_diff[0], vel_diff[1],
+                                          np.linalg.norm(vel_diff),
+                                          vy_bias))
+            if estimate_vy_bias and verbose:
                 print("\nVy bias: ", vy_bias)
 
             time_end = time.time()
@@ -331,15 +331,10 @@ def main():
                 print("\n")
 
             # Log the velocity in a csv file with timestamp_scan, timestamp_min, timstamp_max, x velocity, y velocity
-            vel_pd = pd.DataFrame(np.concatenate([np.array(radar_frame.timestamp).reshape(-1,1), np.array(radar_frame.timestamps.min()).reshape(-1,1), np.array(radar_frame.timestamps.max()).reshape(-1,1), velocity.reshape(1, -1)], axis=1).reshape(1, -1))
-            vel_pd[1] = vel_pd[1].astype(int)
-            vel_pd[2] = vel_pd[2].astype(int)
-            vel_pd[1] = radar_frame.timestamps.min()
-            vel_pd[2] = radar_frame.timestamps.max()
-            if not os.path.exists(other_log_path + '/velocity.csv'):
-                vel_pd.to_csv(other_log_path + '/velocity.csv', header=['timestamp_scan (s)', 'timestamp_min (us)', 'timestamp_max (us)', 'vx', 'vy'], index=None)
-            else:
-                vel_pd.to_csv(other_log_path + '/velocity.csv', mode='a', header=False, index=None)
+            velocity_log.append((radar_frame.timestamp,
+                                  int(radar_frame.timestamps.min()),
+                                  int(radar_frame.timestamps.max()),
+                                  velocity[0], velocity[1]))
 
             # Store the biases
             if use_gyro:
@@ -414,12 +409,7 @@ def main():
                     df_data.to_csv(odom_output_path, mode='a', header=None, index=None, sep=' ')
 
                 # Save the 2D odometry to be synced with the local maps
-                df_data_2d = pd.DataFrame(np.array([radar_frame.timestamps[0][0], current_pos[0][0], current_pos[0][1], current_rot[0]]).reshape(1, -1))
-                df_data_2d[0] = radar_frame.timestamps[0][0].astype(int)
-                if not os.path.exists(odom_2d_path):
-                    df_data_2d.to_csv(odom_2d_path, header=None, index=None, sep=' ')
-                else:
-                    df_data_2d.to_csv(odom_2d_path, mode='a', header=None, index=None, sep=' ')
+                odom_2d_log.append((int(radar_frame.timestamps[0][0]), current_pos[0][0], current_pos[0][1], current_rot[0]))
 
 
 
@@ -466,6 +456,15 @@ def main():
         if use_gyro and estimate_gyro_bias:
             biases = np.array(biases)
             np.savetxt(other_log_path + '/gyro_bias.txt', biases)
+
+        # Save the velocity and Doppler-vs-DRO diff logs (buffered above, written once here
+        # rather than appending to the CSV every frame, which was the per-frame I/O bottleneck)
+        if len(velocity_log) > 0:
+            pd.DataFrame(velocity_log, columns=['timestamp_scan (s)', 'timestamp_min (us)', 'timestamp_max (us)', 'vx', 'vy']).to_csv(other_log_path + '/velocity.csv', index=None)
+        if len(doppler_diff_log) > 0:
+            pd.DataFrame(doppler_diff_log, columns=['timestamp_scan (s)', 'doppler_vx_corrected', 'doppler_vy_corrected', 'dro_vx', 'dro_vy', 'diff_vx', 'diff_vy', 'diff_norm', 'vy_bias']).to_csv(other_log_path + '/doppler_vs_dro_velocity.csv', index=None)
+        if len(odom_2d_log) > 0:
+            pd.DataFrame(odom_2d_log).to_csv(odom_2d_path, header=None, index=None, sep=' ')
 
     if visualise:
         cv2.destroyAllWindows()
