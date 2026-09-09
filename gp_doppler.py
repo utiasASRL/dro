@@ -36,6 +36,7 @@ class GPStateEstimator:
             self.diplay_intensity_normalisation = None
 
             self.timestamps = None
+            self.delta_time = 0.25
 
             radar_res = res
             self.radar_res = torch.tensor(radar_res).to(self.device)
@@ -43,6 +44,11 @@ class GPStateEstimator:
                 self.optimisation_first_step = opts['estimation']['optimisation_first_step']
             else:
                 self.optimisation_first_step = 0.1
+
+            # Gradient ascent solver stopping criteria
+            self.max_iterations = int(opts['estimation'].get('max_iterations', 250))
+            self.cost_tol = float(opts['estimation'].get('cost_tol', 1e-6))
+            self.step_tol = float(opts['estimation'].get('step_tol', 1e-5))
 
             # Load the motion model
             self.use_doppler = torch.tensor(opts['estimation']['doppler_cost']).to(self.device)
@@ -186,6 +192,37 @@ class GPStateEstimator:
 
 
             self.kImgPadding = torch.tensor(self.kImgPadding).to(self.device)
+
+            self.warned_direct_range_clamp = False
+            self.warned_doppler_range_clamp = False
+
+
+    # Forces the max range indices to be within the available radar scan bins
+    def clampRangeToData_(self, nb_bins_available):
+        if self.use_direct and int(self.max_range_idx_direct) > nb_bins_available:
+            if not self.warned_direct_range_clamp:
+                print("Warning: 'direct.max_range' implies " + str(int(self.max_range_idx_direct)) +
+                      " range bins, but the radar scan only has " + str(nb_bins_available) +
+                      ". Clamping to the available range.")
+                self.warned_direct_range_clamp = True
+            self.max_range_idx_direct = torch.tensor(nb_bins_available).to(self.device)
+            self.range_vec = torch.arange(self.max_range_idx_direct).to(self.device).float() * self.radar_res + (self.radar_res / 2.0)
+            if int(self.min_range_idx_direct) >= int(self.max_range_idx_direct):
+                raise ValueError("'direct.min_range' is beyond the range covered by the radar scan "
+                                  "once 'direct.max_range' is clamped to the available data; "
+                                  "lower 'direct.min_range' and/or 'direct.max_range' in the config.")
+
+        if int(self.max_range_idx) > nb_bins_available:
+            if not self.warned_doppler_range_clamp:
+                print("Warning: 'doppler.max_range' implies " + str(int(self.max_range_idx)) +
+                      " range bins, but the radar scan only has " + str(nb_bins_available) +
+                      ". Clamping to the available range.")
+                self.warned_doppler_range_clamp = True
+            self.max_range_idx = torch.tensor(nb_bins_available).to(self.device)
+            if int(self.min_range_idx) >= int(self.max_range_idx):
+                raise ValueError("'doppler.min_range' is beyond the range covered by the radar scan "
+                                  "once 'doppler.max_range' is clamped to the available data; "
+                                  "lower 'doppler.min_range' and/or 'doppler.max_range' in the config.")
 
 
     def seKernel_(self, X1, X2, l_az, l_range):
@@ -664,12 +701,13 @@ class GPStateEstimator:
             try_degraded = try_degraded or (torch.abs(torch.norm(vel[-1,:]) - self.previous_vel) > self.max_diff_vel)
             if try_degraded:
                 if not degraded:
+                    print("Trying degraded mode due to high angular velocity or velocity change.")
                     state = self.solve_(state_init, nb_iter=nb_iter, cost_tol=cost_tol, step_tol=step_tol, verbose=verbose, degraded=True)
 
             if not degraded:
                 vel, _, _ = self.motion_model.getVelPosRot(state, with_jac=False)
                 self.previous_vel = torch.norm(vel[-1,:])
-                self.max_diff_vel = self.motion_model.time[-1] * self.max_acc
+                self.max_diff_vel = self.delta_time * self.max_acc
             
             
 
@@ -727,13 +765,15 @@ class GPStateEstimator:
     def odometryStep(self, polar_image, azimuths, timestamps, chirp_up=True):
         with torch.no_grad():
             self.chirp_up = chirp_up
+            self.clampRangeToData_(polar_image.shape[1])
             if self.timestamps is None:
-                last_scan_time = timestamps[0] - (timestamps[-1] - timestamps[0]) 
-                self.max_diff_vel = self.max_acc * (timestamps[-1] - timestamps[0]) * 10e-6
+                last_scan_time = timestamps[0] - (timestamps[-1] - timestamps[0])
+                self.max_diff_vel = self.max_acc * (timestamps[-1] - timestamps[0]) * 1e-6
             else:
-                last_scan_time = self.timestamps[0]
+                last_scan_time = self.timestamps[0].item()
             self.timestamps = torch.tensor(timestamps).to(self.device).squeeze()
-            delta_time = 0.25#(self.timestamps[0] - last_scan_time)*10e-6
+            delta_time = (timestamps[0] - last_scan_time) * 1e-6
+            self.delta_time = delta_time
 
             # Update the pose and the local map (if needed)
             if self.pose_estimation:
@@ -927,10 +967,10 @@ class GPStateEstimator:
             if self.motion_model.state_size == 3 and self.use_gyro:
                 self.state_init[:2] = self.state_init[:2]*(1+self.state_init[2]*delta_time)
             if torch.norm(self.state_init[:2]) < 0.75:
-                self.state_init[:] = 0.0
+                # self.state_init[:] = 0.0
                 # Reset the lateral velocity filter to avoid dragging the previous motion
                 self.vy_smoothed = None
-            result = self.solve_(self.state_init, 250, 1e-6, 1e-5)
+            result = self.solve_(self.state_init, self.max_iterations, self.cost_tol, self.step_tol)
 
             # Check if the the angular velocity is not too high
             # If it is, we set it to the previous value (preventing potential catastrophic failure)
@@ -960,7 +1000,7 @@ class GPStateEstimator:
         
         save_use_direct = self.use_direct
         self.use_direct = False
-        result = self.solve_(self.state_init, 250, 1e-6, 1e-5)
+        result = self.solve_(self.state_init, self.max_iterations, self.cost_tol, self.step_tol)
 
         self.use_direct = save_use_direct
         return result[:2].detach().cpu().numpy()
